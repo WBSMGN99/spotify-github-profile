@@ -1,24 +1,20 @@
-from flask import Flask, Response
+from flask import Flask, Response, request
 import os
 import requests
 import base64
 
 app = Flask(__name__)
 
-# 自动适配 Kittinan 版的特殊变量名，也兼容标准写法
+# 获取环境变量 (自动兼容两种写法)
 CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 CLIENT_SECRET = os.getenv("SPOTIFY_SECRET_ID") or os.getenv("SPOTIFY_CLIENT_SECRET")
 REFRESH_TOKEN = os.getenv("SPOTIFY_REFRESH_TOKEN")
 
 def get_access_token():
     if not REFRESH_TOKEN:
-        print("Error: No Refresh Token")
         return None
-        
-    # 拼接认证字符串
     auth_str = f"{CLIENT_ID}:{CLIENT_SECRET}"
     auth_b64 = base64.b64encode(auth_str.encode()).decode()
-    
     try:
         response = requests.post(
             "https://accounts.spotify.com/api/token",
@@ -27,83 +23,55 @@ def get_access_token():
             timeout=10
         )
         return response.json().get("access_token")
-    except Exception as e:
-        print(f"Token Error: {e}")
+    except:
         return None
 
-def get_now_playing_data():
+def get_now_playing():
     token = get_access_token()
     if not token: return None
-    
     headers = {"Authorization": f"Bearer {token}"}
     try:
         # 1. 尝试获取正在播放
         resp = requests.get("https://api.spotify.com/v1/me/player/currently-playing", headers=headers, timeout=10)
-        if resp.status_code == 200:
-            return resp.json().get("item")
-            
-        # 2. 如果没播放，获取最近播放
+        if resp.status_code == 200: return resp.json().get("item")
+        # 2. 获取最近播放
         resp = requests.get("https://api.spotify.com/v1/me/player/recently-played?limit=1", headers=headers, timeout=10)
-        if resp.status_code == 200:
-            items = resp.json().get("items")
-            if items: return items[0].get("track")
-    except Exception as e:
-        print(f"API Error: {e}")
+        if resp.status_code == 200 and resp.json().get("items"): return resp.json()["items"][0]["track"]
+    except: pass
     return None
 
 @app.route("/", defaults={'path': ''})
 @app.route("/<path:path>")
-def index(path):
-    item = get_now_playing_data()
-    
-    # 默认显示内容
-    track_name = "Not Playing"
-    artist_name = "Spotify"
-    cover_data = ""
+def catch_all(path):
+    item = get_now_playing()
+    # 默认值
+    track_name, artist_name, cover_data = "Not Playing", "Spotify", ""
     is_playing = False
 
     if item:
         is_playing = True
-        # 处理特殊字符
-        track_name = item.get("name", "Unknown").replace("&", "&amp;")
-        artists = item.get("artists", [])
-        if artists:
-            artist_name = artists[0]["name"].replace("&", "&amp;")
-        
-        # 获取封面并转为 base64
+        track_name = item.get("name", "Unknown").replace("&", "&")
+        artist_name = item["artists"][0]["name"].replace("&", "&") if item["artists"] else "Unknown"
         if item.get("album") and item["album"].get("images"):
             try:
-                cover_url = item["album"]["images"][0]["url"]
-                img_resp = requests.get(cover_url, timeout=5)
+                img_resp = requests.get(item["album"]["images"][0]["url"], timeout=5)
                 if img_resp.status_code == 200:
                     cover_data = base64.b64encode(img_resp.content).decode()
             except: pass
 
-    # 生成图片 (如果有封面显示封面，没有显示灰块)
-    img_tag = f'<image href="data:image/jpeg;base64,{cover_data}" x="2" y="2" height="60" width="60" rx="4"/>' if cover_data else '<rect x="2" y="2" width="60" height="60" fill="#333" rx="4"/>'
-    
-    # 简单的动画条
-    bars_html = ""
+    # 生成图片
+    img_tag = f'<image href="data:image/jpeg;base64,{cover_data}" x="10" y="10" height="80" width="80" rx="4"/>' if cover_data else '<rect x="10" y="10" width="80" height="80" fill="#333" rx="4"/>'
+    bars = ""
     if is_playing:
-        for i in range(15):
-            left = 75 + (i * 6)
-            anim = 400 + (i * 50 % 200)
-            bars_html += f'<rect class="bar" x="{left}" y="45" width="4" height="10" fill="#53b14f" style="animation-duration:{anim}ms"/>'
+        for i in range(12):
+            h = 10 + (i * 5 % 20)
+            bars += f'<rect x="{300 + i*6}" y="{50-h}" width="4" height="{h}" fill="#1DB954"><animate attributeName="height" values="{h};25;{h}" dur="0.8s" repeatCount="indefinite"/></rect>'
 
-    css = """<style>.bar { animation: sound 0ms -800ms linear infinite alternate; } @keyframes sound { 0% { height: 3px; opacity: .35; } 100% { height: 16px; opacity: 1; } }</style>"""
-
-    svg = f"""
-    <svg width="400" height="64" xmlns="http://www.w3.org/2000/svg">
-      <foreignObject width="400" height="64">
-        <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Circular,Helvetica,Arial,sans-serif;"></div>
-      </foreignObject>
-      <rect x="0" y="0" width="400" height="64" fill="#121212" rx="5"/>
+    svg = f"""<svg width="400" height="100" xmlns="http://www.w3.org/2000/svg">
+      <rect width="100%" height="100%" fill="#121212" rx="10"/>
       {img_tag}
-      <text x="75" y="25" fill="white" font-family="Arial, sans-serif" font-weight="bold" font-size="14">{track_name}</text>
-      <text x="75" y="42" fill="#b3b3b3" font-family="Arial, sans-serif" font-size="12">{artist_name}</text>
-      {css}
-      <g transform="scale(1, -1) translate(0, -60)">{bars_html}</g>
-    </svg>
-    """
-    
+      <text x="100" y="45" fill="white" font-family="Arial" font-weight="bold" font-size="14">{track_name}</text>
+      <text x="100" y="70" fill="#b3b3b3" font-family="Arial" font-size="12">{artist_name}</text>
+      {bars}
+    </svg>"""
     return Response(svg, mimetype="image/svg+xml", headers={"Cache-Control": "no-cache, max-age=0"})
